@@ -9,6 +9,15 @@ cite CUFSM: Schafer, B.W., Ádány, S., Li, Z., Jin, S. CUFSM v5.66. DOI 10.5281
 
 Status: a local prototype. Nothing has been published.
 
+## Why this exists
+
+cufsm-rs was written so CUFSM could run in the browser, compiled to WebAssembly, in CivilKit
+Buckling. These bindings make the same engine available in Python, so a script and the web app
+give the same numbers.
+
+For a pure-Python port of CUFSM, see [pyCUFSM](https://github.com/ClearCalcs/pyCUFSM) by
+ClearCalcs, prior work in this space that this project gratefully acknowledges.
+
 ## Install from source
 
 You need Rust (1.75 or later) and Python 3.9 or later. The crate depends on `../cufsm-rs` by path.
