@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "cufsm-py"
+version = "0.1.0"
+description = "Finite strip buckling of thin-walled sections (CUFSM) in Python, backed by the cufsm-rs Rust port."
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["numpy>=1.20"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "cufsm._native"
+features = ["pyo3/extension-module"]
