@@ -11,11 +11,11 @@ use cufsm::cfsm::{classify_with, stripmain_constrained, Norm, OSpace, Orth, Spac
 use cufsm::template::{templatecalc, Shape, Template};
 use cufsm::{
     add_bimoment_stress, cutwp_prop2, grosprop, signature_minima, signature_ss, stresgen,
-    stress_to_action, stripmain, yield_b, yield_mp, yield_mp_extfiber, Actions,
-    BoundaryCondition, Constraint, Dof, Element, LengthResult, Material, Model, Node, Spring,
+    stress_to_action, stripmain, yield_b, yield_mp, yield_mp_extfiber, Actions, BoundaryCondition,
+    Constraint, Dof, Element, LengthResult, Material, Model, Node, Spring,
 };
 use pyo3::create_exception;
-use pyo3::exceptions::{PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -43,7 +43,9 @@ fn dof(code: f64, what: &str) -> PyResult<Dof> {
         2 => Ok(Dof::Z),
         3 => Ok(Dof::Y),
         4 => Ok(Dof::Theta),
-        c => Err(bad(format!("{what}: DOF code {c} is not 1 (x), 2 (z), 3 (y) or 4 (theta)"))),
+        c => Err(bad(format!(
+            "{what}: DOF code {c} is not 1 (x), 2 (z), 3 (y) or 4 (theta)"
+        ))),
     }
 }
 
@@ -69,7 +71,9 @@ fn build(
     springs: &[Vec<f64>],
 ) -> PyResult<Model> {
     if prop.is_empty() {
-        return Err(bad("prop is empty: at least one material row [mat#, Ex, Ey, vx, vy, G] is needed"));
+        return Err(bad(
+            "prop is empty: at least one material row [mat#, Ex, Ey, vx, vy, G] is needed",
+        ));
     }
     let mut mat_index = HashMap::new();
     let mut materials = Vec::with_capacity(prop.len());
@@ -86,7 +90,13 @@ fn build(
         if mat_index.insert(p[0] as i64, i).is_some() {
             return Err(bad(format!("prop: material number {} appears twice", p[0])));
         }
-        materials.push(Material { ex: p[1], ey: p[2], vx: p[3], vy: p[4], g: p[5] });
+        materials.push(Material {
+            ex: p[1],
+            ey: p[2],
+            vx: p[3],
+            vy: p[4],
+            g: p[5],
+        });
     }
     let mut node_index = HashMap::new();
     let mut nodes = Vec::with_capacity(node.len());
@@ -127,7 +137,10 @@ fn build(
         let what = format!("elem row {i}");
         let mat = if e.len() == 5 {
             *mat_index.get(&(e[4] as i64)).ok_or_else(|| {
-                bad(format!("{what} refers to material {}, which is not in prop", e[4]))
+                bad(format!(
+                    "{what} refers to material {}, which is not in prop",
+                    e[4]
+                ))
             })?
         } else {
             0
@@ -170,7 +183,11 @@ fn build(
         }
         sprs.push(Spring {
             ni: node_of(s[1], &what)?,
-            nj: if s[2] == 0.0 { None } else { Some(node_of(s[2], &what)?) },
+            nj: if s[2] == 0.0 {
+                None
+            } else {
+                Some(node_of(s[2], &what)?)
+            },
             ku: s[3],
             kv: s[4],
             kw: s[5],
@@ -180,20 +197,33 @@ fn build(
             ys_fraction: s[9],
         });
     }
-    let m = Model { materials, nodes, elements, constraints: cons, springs: sprs };
+    let m = Model {
+        materials,
+        nodes,
+        elements,
+        constraints: cons,
+        springs: sprs,
+    };
     m.validate().map_err(to_py)?;
     Ok(m)
 }
 
-type Arrays = (Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<Vec<f64>>);
+/// A CUFSM table: one `Vec` per row.
+type Table = Vec<Vec<f64>>;
+
+/// prop, node, elem, constraints, springs.
+type Arrays = (Table, Table, Table, Table, Table);
 
 fn model_of(a: &Arrays) -> PyResult<Model> {
     build(&a.0, &a.1, &a.2, &a.3, &a.4)
 }
 
 fn parse_bc(bc: &str) -> PyResult<BoundaryCondition> {
-    BoundaryCondition::parse(&bc.to_ascii_uppercase())
-        .ok_or_else(|| bad(format!("boundary condition {bc:?} is not one of S-S, C-C, S-C, C-F, C-G")))
+    BoundaryCondition::parse(&bc.to_ascii_uppercase()).ok_or_else(|| {
+        bad(format!(
+            "boundary condition {bc:?} is not one of S-S, C-C, S-C, C-F, C-G"
+        ))
+    })
 }
 
 /// Gross properties (grosprop) and thin-walled properties (cutwp_prop2).
@@ -242,7 +272,18 @@ fn stress(
 ) -> PyResult<Vec<f64>> {
     let mut m = model_of(&arrays)?;
     let g = grosprop(&m);
-    stresgen(&mut m, &Actions { p, mxx, mzz, m11, m22 }, &g, unsymmetric);
+    stresgen(
+        &mut m,
+        &Actions {
+            p,
+            mxx,
+            mzz,
+            m11,
+            m22,
+        },
+        &g,
+        unsymmetric,
+    );
     if b != 0.0 {
         let c = cutwp_prop2(&m);
         add_bimoment_stress(&mut m, b, c.cw, &c.wn);
@@ -289,16 +330,28 @@ fn py_stress_to_action<'py>(py: Python<'py>, arrays: Arrays) -> PyResult<Bound<'
     let c = cutwp_prop2(&m);
     let s = stress_to_action(&m, &grosprop(&m), c.cw, &c.wn);
     let d = PyDict::new(py);
-    for (k, v) in [("P", s.p), ("M11", s.m11), ("M22", s.m22), ("B", s.b), ("err", s.err)] {
+    for (k, v) in [
+        ("P", s.p),
+        ("M11", s.m11),
+        ("M22", s.m22),
+        ("B", s.b),
+        ("err", s.err),
+    ] {
         d.set_item(k, v)?;
     }
     Ok(d)
 }
 
-type Row = (f64, Vec<f64>, Vec<f64>, Vec<Vec<f64>>);
+/// One length: (length, m_terms, load factors, modes).
+type Row = (f64, Vec<f64>, Vec<f64>, Table);
+
+/// A signature curve's rows and its minima as (half-wavelength, load factor).
+type Signature = (Vec<Row>, Vec<(f64, f64)>);
 
 fn rows(r: Vec<LengthResult>) -> Vec<Row> {
-    r.into_iter().map(|l| (l.length, l.m_terms, l.load_factors, l.modes)).collect()
+    r.into_iter()
+        .map(|l| (l.length, l.m_terms, l.load_factors, l.modes))
+        .collect()
 }
 
 fn parse_spaces(s: &str) -> PyResult<Spaces> {
@@ -356,7 +409,7 @@ fn signature(
     arrays: Arrays,
     lengths: Option<Vec<f64>>,
     neigs: usize,
-) -> PyResult<(Vec<Row>, Vec<(f64, f64)>)> {
+) -> PyResult<Signature> {
     let m = model_of(&arrays)?;
     if neigs == 0 {
         return Err(bad("neigs must be at least 1"));
@@ -377,7 +430,10 @@ fn signature(
             }
         })
         .map_err(to_py)?;
-    let minima = signature_minima(&res).into_iter().map(|x| (x.length, x.load_factor)).collect();
+    let minima = signature_minima(&res)
+        .into_iter()
+        .map(|x| (x.length, x.load_factor))
+        .collect();
     Ok((rows(res), minima))
 }
 
@@ -406,7 +462,11 @@ fn classify(
         "vector" => Norm::Vector,
         "strain_energy" => Norm::StrainEnergy,
         "work" => Norm::Work,
-        n => return Err(bad(format!("norm {n:?} is not none, vector, strain_energy or work"))),
+        n => {
+            return Err(bad(format!(
+                "norm {n:?} is not none, vector, strain_energy or work"
+            )))
+        }
     };
     let ospace = match ospace.to_ascii_lowercase().as_str() {
         "st" => OSpace::St,
@@ -427,10 +487,16 @@ fn classify(
                     m_terms.len()
                 )));
             }
-            Ok(LengthResult { length, m_terms, load_factors, modes })
+            Ok(LengthResult {
+                length,
+                m_terms,
+                load_factors,
+                modes,
+            })
         })
         .collect::<PyResult<_>>()?;
-    py.detach(|| classify_with(&m, &lr, bc, orth, norm, ospace)).map_err(to_py)
+    py.detach(|| classify_with(&m, &lr, bc, orth, norm, ospace))
+        .map_err(to_py)
 }
 
 /// CUFSM's C/Z template (templatecalc). Returns (node, elem) CUFSM arrays, 1-based.
@@ -461,7 +527,7 @@ fn template(
     nr3: usize,
     nr4: usize,
     centerline: bool,
-) -> PyResult<(Vec<Vec<f64>>, Vec<Vec<f64>>)> {
+) -> PyResult<(Table, Table)> {
     let shape = match shape.to_ascii_uppercase().as_str() {
         "C" => Shape::C,
         "Z" => Shape::Z,
@@ -472,7 +538,14 @@ fn template(
             return Err(bad(format!("{name} = {v} must be positive")));
         }
     }
-    for (name, v) in [("d1", d1), ("d2", d2), ("r1", r1), ("r2", r2), ("r3", r3), ("r4", r4)] {
+    for (name, v) in [
+        ("d1", d1),
+        ("d2", d2),
+        ("r1", r1),
+        ("r2", r2),
+        ("r3", r3),
+        ("r4", r4),
+    ] {
         if !(v.is_finite() && v >= 0.0) {
             return Err(bad(format!("{name} = {v} must be zero or positive")));
         }
@@ -481,8 +554,29 @@ fn template(
         return Err(bad("nh, nb1 and nb2 must be at least 1"));
     }
     let tp = Template {
-        shape, h, b1, b2, d1, d2, r1, r2, r3, r4, q1, q2, t,
-        nh, nb1, nb2, nd1, nd2, nr1, nr2, nr3, nr4, centerline,
+        shape,
+        h,
+        b1,
+        b2,
+        d1,
+        d2,
+        r1,
+        r2,
+        r3,
+        r4,
+        q1,
+        q2,
+        t,
+        nh,
+        nb1,
+        nb2,
+        nd1,
+        nd2,
+        nr1,
+        nr2,
+        nr3,
+        nr4,
+        centerline,
     };
     // Material is a placeholder: the Python side supplies prop.
     let m = templatecalc(&tp, Material::isotropic(1.0, 0.3));
@@ -492,7 +586,16 @@ fn template(
         .enumerate()
         .map(|(i, n)| {
             let f = |b: bool| if b { 1.0 } else { 0.0 };
-            vec![(i + 1) as f64, n.x, n.z, f(n.free[0]), f(n.free[1]), f(n.free[2]), f(n.free[3]), n.stress]
+            vec![
+                (i + 1) as f64,
+                n.x,
+                n.z,
+                f(n.free[0]),
+                f(n.free[1]),
+                f(n.free[2]),
+                f(n.free[3]),
+                n.stress,
+            ]
         })
         .collect();
     let elem = m
