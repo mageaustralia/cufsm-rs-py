@@ -1,0 +1,219 @@
+# Builds abi3 wheels (one per platform covers CPython 3.9 and later) and the sdist, tests the
+# built wheels, and publishes to PyPI by trusted publishing when a v* tag is pushed.
+#
+# Started from `maturin generate-ci github --platform linux musllinux windows macos`
+# (maturin 1.15.0), then: abi3 only (no per-version or free-threaded builds), the platforms
+# below, a lint job, a test job against the built wheels, and trusted publishing.
+name: Build, test and release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --release -- -D warnings
+
+  linux:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-22.04
+            target: x86_64
+          - runner: ubuntu-22.04
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          manylinux: auto
+      - name: Upload wheels
+        uses: actions/upload-artifact@v6
+        with:
+          name: wheels-linux-${{ matrix.platform.target }}
+          path: dist
+
+  musllinux:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-22.04
+            target: x86_64
+          - runner: ubuntu-22.04
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          manylinux: musllinux_1_2
+      - name: Upload wheels
+        uses: actions/upload-artifact@v6
+        with:
+          name: wheels-musllinux-${{ matrix.platform.target }}
+          path: dist
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          architecture: x64
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x64
+          args: --release --out dist
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Upload wheels
+        uses: actions/upload-artifact@v6
+        with:
+          name: wheels-windows-x64
+          path: dist
+
+  macos:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: macos-15-intel
+            target: x86_64
+          - runner: macos-latest
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Upload wheels
+        uses: actions/upload-artifact@v6
+        with:
+          name: wheels-macos-${{ matrix.platform.target }}
+          path: dist
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - name: Upload sdist
+        uses: actions/upload-artifact@v6
+        with:
+          name: wheels-sdist
+          path: dist
+
+  # The test suite against the built wheels (not the source tree), with the CUFSM oracle
+  # fixture from the cufsm-rs release this package depends on.
+  test:
+    needs: [linux, windows, macos]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, python: "3.9", wheels: wheels-linux-x86_64 }
+          - { os: ubuntu-22.04, python: "3.13", wheels: wheels-linux-x86_64 }
+          - { os: macos-latest, python: "3.12", wheels: wheels-macos-aarch64 }
+          - { os: windows-latest, python: "3.9", wheels: wheels-windows-x64 }
+          - { os: windows-latest, python: "3.13", wheels: wheels-windows-x64 }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: mageaustralia/cufsm-rs
+          ref: v0.4.1
+          path: cufsm-rs
+          sparse-checkout: tests/fixtures
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: ${{ matrix.wheels }}
+          path: dist
+      - name: Install the wheel
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          wheel=$(ls dist/*.whl)
+          python -m pip install "${wheel}[test]"
+      - name: Test
+        shell: bash
+        env:
+          CUFSM_ORACLE: ${{ github.workspace }}/cufsm-rs/tests/fixtures/cufsm_octave.json
+          MPLBACKEND: Agg
+        run: |
+          python -c "import cufsm_rs, sys; print(cufsm_rs.__file__); assert 'site-packages' in cufsm_rs.__file__"
+          python -m pytest -q tests
+
+  release:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: [lint, linux, musllinux, windows, macos, sdist, test]
+    environment:
+      name: pypi
+      url: https://pypi.org/p/cufsm-rs-py
+    permissions:
+      # trusted publishing (OIDC) and artifact attestations
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: Generate artifact attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: "dist/*"
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

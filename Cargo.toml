@@ -3,7 +3,9 @@ name = "cufsm-rs-py"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Python bindings for cufsm-rs, a Rust port of CUFSM (finite strip buckling of thin-walled sections)."
+description = "Python bindings for cufsm-rs, the Rust port of CUFSM (finite strip buckling of thin-walled sections)."
+repository = "https://github.com/mageaustralia/cufsm-rs-py"
+authors = ["Matthew Campbell <mcampbell@mageaustralia.com.au>"]
 publish = false
 
 [lib]

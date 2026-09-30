@@ -5,20 +5,71 @@ build-backend = "maturin"
 [project]
 name = "cufsm-rs-py"
 version = "0.1.0"
-description = "Finite strip buckling of thin-walled sections (CUFSM) in Python, backed by the cufsm-rs Rust port."
+description = "CUFSM finite strip buckling analysis of thin-walled sections in Python, on cufsm-rs, the Rust port that also runs CUFSM in the browser."
+readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
-dependencies = ["numpy>=1.20"]
-classifiers = [
-    "Programming Language :: Rust",
-    "Programming Language :: Python :: 3",
-    "Topic :: Scientific/Engineering",
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Matthew Campbell", email = "mcampbell@mageaustralia.com.au" }]
+keywords = [
+    "cufsm",
+    "finite strip method",
+    "buckling",
+    "thin-walled",
+    "cold-formed steel",
+    "direct strength method",
+    "structural engineering",
 ]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Typing :: Typed",
+]
+dependencies = ["numpy>=1.20"]
 
 [project.optional-dependencies]
-test = ["pytest"]
+plot = ["matplotlib>=3.5"]
+test = ["pytest>=7", "matplotlib>=3.5"]
+dev = [
+    "maturin>=1.5,<2",
+    "pytest>=7",
+    "matplotlib>=3.5",
+    "nbclient",
+    "nbformat",
+    "ipykernel",
+    "twine",
+]
+
+[project.urls]
+Homepage = "https://github.com/mageaustralia/cufsm-rs-py"
+Repository = "https://github.com/mageaustralia/cufsm-rs-py"
+Changelog = "https://github.com/mageaustralia/cufsm-rs-py/blob/main/CHANGELOG.md"
+"Rust crate (cufsm-rs)" = "https://github.com/mageaustralia/cufsm-rs"
+CUFSM = "https://www.ce.jhu.edu/cufsm/"
 
 [tool.maturin]
 python-source = "python"
 module-name = "cufsm_rs._native"
 features = ["pyo3/extension-module"]
+exclude = [
+    { path = "examples/*.png", format = "sdist" },
+    { path = ".github/**", format = "sdist" },
+    { path = "examples/*.ipynb", format = "sdist" },
+    { path = "dist/**", format = "sdist" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
