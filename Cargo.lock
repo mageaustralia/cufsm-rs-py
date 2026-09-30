@@ -3,16 +3,16 @@
 version = 4
 
 [[package]]
-name = "cufsm-py"
+name = "cufsm-rs"
+version = "0.4.0"
+
+[[package]]
+name = "cufsm-rs-py"
 version = "0.1.0"
 dependencies = [
  "cufsm-rs",
  "pyo3",
 ]
-
-[[package]]
-name = "cufsm-rs"
-version = "0.4.0"
 
 [[package]]
 name = "heck"

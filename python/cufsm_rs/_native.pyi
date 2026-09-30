@@ -1,4 +1,4 @@
-"""Type stubs for the compiled layer (src/lib.rs). The public API is cufsm/__init__.py, which is
+"""Type stubs for the compiled layer (src/lib.rs). The public API is cufsm_rs/__init__.py, which is
 typed inline; these cover what it calls."""
 
 from typing import Dict, List, Optional, Tuple

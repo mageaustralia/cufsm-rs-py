@@ -1,4 +1,6 @@
-# cufsm (Python)
+# cufsm-rs-py
+
+`pip install cufsm-rs-py`, then `import cufsm_rs`. (Not published yet: install from source below.)
 
 Python bindings for [cufsm-rs](../cufsm-rs), a Rust port of CUFSM, the finite strip method for
 elastic buckling of thin-walled sections (Schafer et al., Johns Hopkins University). This is an
@@ -40,34 +42,34 @@ numbers:
 
 ```python
 import numpy as np
-import cufsm
+import cufsm_rs as fsm
 
 xz = [(5, 1), (5, 0), (2.5, 0), (0, 0), (0, 3), (0, 6), (0, 9), (2.5, 9), (5, 9), (5, 8)]
-m = cufsm.Model(
+m = fsm.Model(
     prop=[[100, 29500, 29500, 0.3, 0.3, 11346.15]],
     node=[[i + 1, x, z, 1, 1, 1, 1, 0] for i, (x, z) in enumerate(xz)],
     elem=[[i + 1, i + 1, i + 2, 0.1, 100] for i in range(9)],
 )
 
-p = cufsm.section_properties(m)          # A, xcg, zcg, Ixx, Izz, Ixz, thetap, I11, I22, J, xs, zs, Cw, B1, B2, wn
-y = cufsm.first_yield(m, fy=50)           # Py=105, Mxx=324.64 at the element faces
-yc = cufsm.first_yield(m, 50, extreme_fibre=False)   # Mxx=328.25, Mzz=112.51 at the centreline
+p = fsm.section_properties(m)          # A, xcg, zcg, Ixx, Izz, Ixz, thetap, I11, I22, J, xs, zs, Cw, B1, B2, wn
+y = fsm.first_yield(m, fy=50)           # Py=105, Mxx=324.64 at the element faces
+yc = fsm.first_yield(m, 50, extreme_fibre=False)   # Mxx=328.25, Mzz=112.51 at the centreline
 
-mc = cufsm.stress(m, P=y.Py)              # a new Model with the reference stresses set
-sig = cufsm.signature(mc)                 # CUFSM signature_ss: 100 log-spaced half-wavelengths
+mc = fsm.stress(m, P=y.Py)              # a new Model with the reference stresses set
+sig = fsm.signature(mc)                 # CUFSM signature_ss: 100 log-spaced half-wavelengths
 sig.lengths, sig.curve, sig.minima        # numpy arrays; minima rows are [length, load factor]
 
-r = cufsm.strip(mc, np.logspace(0, 3, 60), bc="S-S", neigs=5)
+r = fsm.strip(mc, np.logspace(0, 3, 60), bc="S-S", neigs=5)
 r.load_factors                            # (60, 5)
 r.modes                                   # (60, 5, 4*nnodes*nterms), CUFSM DOF order
 gdlo = r.classify()                       # (60, 5, 4): cFSM G, D, L, O percent
 
-dist = cufsm.strip(mc, [20.0], spaces="D", neigs=1)   # pure distortional (cFSM)
-cc = cufsm.strip(mc, [100.0], m_all=10, bc="C-C")     # general end conditions, terms 1..10
+dist = fsm.strip(mc, [20.0], spaces="D", neigs=1)   # pure distortional (cFSM)
+cc = fsm.strip(mc, [100.0], m_all=10, bc="C-C")     # general end conditions, terms 1..10
 ```
 
 Invalid input raises `ValueError`, and the message names the bad row. A model with a mechanism
-raises `cufsm.MechanismError`, which is a subclass of `ValueError`. The long solves (`strip`,
+raises `fsm.MechanismError`, which is a subclass of `ValueError`. The long solves (`strip`,
 `signature`, `classify`) release the GIL, and cufsm-rs spreads the lengths across threads.
 
 ## Tests

@@ -10,7 +10,7 @@ import pathlib
 import numpy as np
 import pytest
 
-import cufsm
+import cufsm_rs as cufsm
 
 ORACLE = pathlib.Path(
     os.environ.get(

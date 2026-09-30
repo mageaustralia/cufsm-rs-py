@@ -1,6 +1,6 @@
-//! Native layer of the `cufsm` Python package: thin PyO3 wrappers over cufsm-rs.
+//! Native layer of the `cufsm_rs` Python package (`pip install cufsm-rs-py`): thin PyO3 wrappers over cufsm-rs.
 //!
-//! The Python side (`python/cufsm/__init__.py`) owns the CUFSM-style arrays and the NumPy
+//! The Python side (`python/cufsm_rs/__init__.py`) owns the CUFSM-style arrays and the NumPy
 //! conversion; everything here takes and returns plain lists so the boundary stays simple.
 //! Models arrive as CUFSM arrays (prop, node, elem, constraints, springs) with CUFSM's own
 //! 1-based node and material numbers, and are mapped to the crate's 0-based model here.
@@ -20,7 +20,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 create_exception!(
-    _native,
+    cufsm_rs,
     MechanismError,
     PyValueError,
     "The elastic stiffness is not positive definite: the section has a mechanism at this length."

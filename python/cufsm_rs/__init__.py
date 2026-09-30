@@ -87,6 +87,9 @@ class Model:
         self.springs = _rows(springs, (10,), "springs")
         if len(self.prop) == 0 or len(self.node) == 0 or len(self.elem) == 0:
             raise ValueError("prop, node and elem must each have at least one row")
+        if self.elem.shape[1] == 4:
+            # CUFSM's elem has 5 columns; a 4-column table means every element is the first material
+            self.elem = np.hstack([self.elem, np.full((len(self.elem), 1), self.prop[0, 0])])
 
     # --- alternative constructors -------------------------------------------------------
     @classmethod
@@ -310,7 +313,7 @@ class SignatureResult(StripResult):
 
 def _model(m) -> Model:
     if not isinstance(m, Model):
-        raise TypeError(f"expected a cufsm.Model, got {type(m).__name__}")
+        raise TypeError(f"expected a cufsm_rs.Model, got {type(m).__name__}")
     return m
 
 

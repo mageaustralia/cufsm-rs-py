@@ -5,7 +5,7 @@ import time
 import numpy as np
 import pytest
 
-import cufsm
+import cufsm_rs as cufsm
 
 XZ = [(5, 1), (5, 0), (2.5, 0), (0, 0), (0, 3), (0, 6), (0, 9), (2.5, 9), (5, 9), (5, 8)]
 PROP = [[100, 29500, 29500, 0.3, 0.3, 11346.15]]
@@ -113,3 +113,16 @@ def test_signature_timing_lipped_c(capsys):
         print(f"\n[timing] signature, lipped C 200x76x15x1.9 r3 ({len(m.node)} nodes), 90 lengths: {dt*1e3:.1f} ms; "
               f"minima {np.round(sig.minima, 3).tolist()}")
     assert len(sig.minima) >= 2
+
+
+def test_elem_always_has_the_material_column():
+    c = cufsm.lipped_c(200, 76, 15, 1.9, ri=3.0)
+    assert c.elem.shape[1] == 5 and np.all(c.elem[:, 4] == c.prop[0, 0])
+    four = cufsm.Model(PROP, NODE, [r[:4] for r in ELEM])
+    assert four.elem.shape[1] == 5 and np.all(four.elem[:, 4] == 100)
+    assert cufsm.first_yield(four, 50).Mxx == cufsm.first_yield(cufsm.Model(PROP, NODE, ELEM), 50).Mxx
+
+
+def test_names():
+    assert cufsm.__name__ == "cufsm_rs"
+    assert cufsm.MechanismError.__module__ == "cufsm_rs"
