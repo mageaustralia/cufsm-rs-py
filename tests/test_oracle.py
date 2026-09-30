@@ -18,7 +18,10 @@ ORACLE = pathlib.Path(
         pathlib.Path(__file__).resolve().parents[2] / "cufsm-rs/tests/fixtures/cufsm_octave.json",
     )
 )
-pytestmark = pytest.mark.skipif(not ORACLE.exists(), reason=f"oracle fixture not found at {ORACLE}")
+pytestmark = pytest.mark.skipif(not ORACLE.exists(), reason=(
+        f"CUFSM oracle fixture not found at {ORACLE}; it ships with the cufsm-rs source "
+        "(tests/fixtures/cufsm_octave.json): set CUFSM_ORACLE to its path to run these tests"
+    ),)
 
 
 @pytest.fixture(scope="module")
