@@ -7,19 +7,11 @@ import pytest
 
 import cufsm_rs as cufsm
 
-XZ = [(5, 1), (5, 0), (2.5, 0), (0, 0), (0, 3), (0, 6), (0, 9), (2.5, 9), (5, 9), (5, 8)]
-PROP = [[100, 29500, 29500, 0.3, 0.3, 11346.15]]
-NODE = [[i + 1, x, z, 1, 1, 1, 1, 0.0] for i, (x, z) in enumerate(XZ)]
-ELEM = [[i + 1, i + 1, i + 2, 0.1, 100] for i in range(9)]
+from conftest import ELEM, NODE, PROP, XZ
 
 
 def rel(a, b):
     return abs(a / b - 1)
-
-
-@pytest.fixture
-def tutorial():
-    return cufsm.Model(PROP, NODE, ELEM)
 
 
 def test_tutorial_first_yield(tutorial):

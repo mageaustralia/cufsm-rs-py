@@ -1,27 +1,49 @@
-"""Finite strip buckling of thin-walled sections (CUFSM), backed by the cufsm-rs Rust port.
+"""Finite strip buckling of thin-walled sections (CUFSM) in Python, backed by the cufsm-rs Rust port.
 
-Models use CUFSM's own arrays and column order:
+cufsm-rs is a Rust port of CUFSM written so CUFSM can run in the browser (WebAssembly); this
+package makes the same engine available from Python.
+
+Units
+-----
+The package is unit-agnostic, as CUFSM is: use any consistent set, for example N, mm and MPa
+(forces in N, lengths in mm, stresses and moduli in MPa, moments in N mm) or kip, in and ksi.
+Every result comes back in the same set.
+
+Load factors
+------------
+A load factor is a multiplier on the model's reference stresses (node column 8): the section
+buckles when the reference stresses are multiplied by the load factor. If the reference stresses
+come from ``stress(model, P=Py)``, a load factor reads directly as ``Pcr / Py``.
+
+Models
+------
+Models use CUFSM's own arrays and column order, with CUFSM's 1-based node and material numbers:
 
 - ``prop``        ``[mat#, Ex, Ey, vx, vy, G]``
 - ``node``        ``[node#, x, z, xdof, zdof, ydof, qdof, stress]`` (dof 1 = free, 0 = fixed)
-- ``elem``        ``[elem#, nodei, nodej, t, mat#]`` (1-based node and material numbers)
+- ``elem``        ``[elem#, nodei, nodej, t, mat#]``
 - ``constraints`` ``[node#e, dofe, coeff, node#k, dofk]``
 - ``springs``     ``[#, nodei, nodej, ku, kv, kw, kq, local, discrete, ys]`` (nodej 0 = ground)
 
-This is an independent port of CUFSM (Schafer et al., Johns Hopkins University), not
-affiliated with or endorsed by the CUFSM authors.
+x and z are the cross-section coordinates and y runs along the member. Positive stress is
+compression.
+
+This is an independent port of CUFSM (B.W. Schafer and co-workers, Johns Hopkins University),
+not affiliated with or endorsed by the CUFSM authors.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Union
 
 import numpy as np
 
-from . import _native
+from . import _display, _native
 from ._native import MechanismError
+
+__version__ = "0.1.0"
 
 __all__ = [
     "Model",
@@ -29,8 +51,10 @@ __all__ = [
     "YieldActions",
     "StressActions",
     "StripResult",
-    "SignatureResult",
+    "ModeShape",
+    "Displacements",
     "MechanismError",
+    "MODE_CLASSES",
     "section_properties",
     "stress",
     "first_yield",
@@ -46,6 +70,19 @@ __all__ = [
 
 ArrayLike = Union[np.ndarray, Sequence[Sequence[float]]]
 
+#: The cFSM mode classes, in the order :func:`classify` returns them: global, distortional,
+#: local, other.
+MODE_CLASSES = ("G", "D", "L", "O")
+
+
+def __getattr__(name: str) -> Any:
+    # ``cufsm_rs.plot`` is imported on first use, so the core package never needs matplotlib.
+    if name == "plot":
+        import importlib
+
+        return importlib.import_module(".plot", __name__)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 def _rows(a: Optional[ArrayLike], ncols: Iterable[int], name: str) -> np.ndarray:
     ncols = tuple(ncols)
@@ -57,7 +94,9 @@ def _rows(a: Optional[ArrayLike], ncols: Iterable[int], name: str) -> np.ndarray
     if arr.ndim == 1:
         arr = arr.reshape(1, -1)
     if arr.ndim != 2 or arr.shape[1] not in ncols:
-        raise ValueError(f"{name} must be a 2-D array with {' or '.join(map(str, ncols))} columns, got shape {arr.shape}")
+        raise ValueError(
+            f"{name} must be a 2-D array with {' or '.join(map(str, ncols))} columns, got shape {arr.shape}"
+        )
     return arr
 
 
@@ -70,6 +109,24 @@ class Model:
 
     or from plain Python objects with :meth:`from_dicts`, or from a template
     (:func:`lipped_c`, :func:`template`).
+
+    The model is unit-agnostic: coordinates, thicknesses, moduli and stresses must be in one
+    consistent set of units (e.g. mm and MPa, or in and ksi). The ``stress`` column holds the
+    reference stresses (positive = compression) that load factors multiply.
+
+    Attributes
+    ----------
+    prop : ndarray, (nmat, 6)
+        ``[mat#, Ex, Ey, vx, vy, G]``.
+    node : ndarray, (nnodes, 8)
+        ``[node#, x, z, xdof, zdof, ydof, qdof, stress]``; a DOF flag of 1 is free, 0 fixed.
+    elem : ndarray, (nelem, 5)
+        ``[elem#, nodei, nodej, t, mat#]`` (a 4-column table gets the first material).
+    constraints : ndarray, (n, 5)
+        ``[node#e, dofe, coeff, node#k, dofk]``: DOF e of node e equals coeff times DOF k of
+        node k (DOF codes 1 = x, 2 = z, 3 = y, 4 = theta).
+    springs : ndarray, (n, 10)
+        ``[#, nodei, nodej, ku, kv, kw, kq, local, discrete, ys]`` (CUFSM v4.3 form).
     """
 
     def __init__(
@@ -103,13 +160,15 @@ class Model:
         constraints: Sequence[Mapping[str, Any]] = (),
         springs: Sequence[Mapping[str, Any]] = (),
     ) -> "Model":
-        """A model from lists of dicts, 0-based node indices.
+        """A model from lists of dicts, with 0-based node, element and material indices.
 
-        ``nodes``: ``{"x", "z", "stress"=1.0, "free"=(1,1,1,1)}``;
+        ``nodes``: ``{"x", "z", "stress"=1.0, "free"=(1,1,1,1)}`` (free flags for x, z, y, theta);
         ``elements``: ``{"i", "j", "t", "mat"=0}``;
         ``materials``: ``{"E", "nu"}`` or ``{"Ex","Ey","vx","vy","G"}``, or give ``E``/``nu``;
         ``constraints``: ``{"node_e","dof_e","coeff","node_k","dof_k"}`` (dof 1..4 or "x","z","y","q");
         ``springs``: ``{"i", "j"=None, "ku","kv","kw","kq"=0, "local"=False, "discrete"=False, "ys"=0}``.
+
+        Units are whatever consistent set you use for the coordinates, thicknesses and moduli.
         """
         if materials is None:
             if E is None:
@@ -130,8 +189,14 @@ class Model:
             node.append([k + 1, n["x"], n["z"], *[1.0 if b else 0.0 for b in f], n.get("stress", 1.0)])
         elem = [[k + 1, e["i"] + 1, e["j"] + 1, e["t"], e.get("mat", 0) + 1] for k, e in enumerate(elements)]
         dofs = {"x": 1, "z": 2, "y": 3, "q": 4, "theta": 4}
-        d = lambda v: dofs[v] if isinstance(v, str) else int(v)  # noqa: E731
-        cons = [[c["node_e"] + 1, d(c["dof_e"]), c.get("coeff", 1.0), c["node_k"] + 1, d(c["dof_k"])] for c in constraints]
+
+        def d(v: Union[str, int]) -> int:
+            return dofs[v] if isinstance(v, str) else int(v)
+
+        cons = [
+            [c["node_e"] + 1, d(c["dof_e"]), c.get("coeff", 1.0), c["node_k"] + 1, d(c["dof_k"])]
+            for c in constraints
+        ]
         sprs = [
             [
                 k + 1, s["i"] + 1, 0 if s.get("j") is None else s["j"] + 1,
@@ -145,21 +210,25 @@ class Model:
     # --- conveniences -------------------------------------------------------------------
     @property
     def x(self) -> np.ndarray:
+        """Node x coordinates (node column 2)."""
         return self.node[:, 1]
 
     @property
     def z(self) -> np.ndarray:
+        """Node z coordinates (node column 3)."""
         return self.node[:, 2]
 
     @property
     def stress(self) -> np.ndarray:
-        """Nodal reference stresses (node column 8)."""
+        """Nodal reference stresses (node column 8), positive = compression."""
         return self.node[:, 7]
 
     def copy(self) -> "Model":
+        """A deep copy."""
         return Model(self.prop.copy(), self.node.copy(), self.elem.copy(), self.constraints.copy(), self.springs.copy())
 
     def with_stress(self, s: ArrayLike) -> "Model":
+        """A copy with the reference stresses replaced by ``s`` (one value per node)."""
         m = self.copy()
         s = np.asarray(s, dtype=float)
         if s.shape != (len(m.node),):
@@ -182,15 +251,32 @@ class Model:
             f"{len(self.constraints)} constraints, {len(self.springs)} springs)"
         )
 
+    def _repr_html_(self) -> str:
+        return _display.model_html(self)
+
     # method forms of the module functions
     def section_properties(self) -> "SectionProperties":
+        """See :func:`section_properties`."""
         return section_properties(self)
 
     def first_yield(self, fy: float, restrained: bool = False, extreme_fibre: bool = True) -> "YieldActions":
+        """See :func:`first_yield`."""
         return first_yield(self, fy, restrained=restrained, extreme_fibre=extreme_fibre)
 
-    def signature(self, lengths=None, neigs: int = 1) -> "SignatureResult":
+    def signature(self, lengths: Optional[ArrayLike] = None, neigs: int = 1) -> "StripResult":
+        """See :func:`signature`."""
         return signature(self, lengths, neigs=neigs)
+
+    def strip(
+        self,
+        lengths: ArrayLike,
+        m_all: Union[None, int, Sequence[Any]] = None,
+        bc: str = "S-S",
+        neigs: int = 20,
+        spaces: Optional[str] = None,
+    ) -> "StripResult":
+        """See :func:`strip`."""
+        return strip(self, lengths, m_all=m_all, bc=bc, neigs=neigs, spaces=spaces)
 
 
 # --- results ---------------------------------------------------------------------------
@@ -209,7 +295,26 @@ class _DictLike:
 
 @dataclass(frozen=True)
 class SectionProperties(_DictLike):
-    """grosprop + cutwp_prop2. ``thetap`` in degrees; ``wn`` is the normalised warping per node."""
+    """Gross (CUFSM grosprop) and thin-walled (cutwp_prop2) section properties.
+
+    In the model's consistent units (e.g. mm: A in mm^2, I in mm^4, J in mm^4, Cw in mm^6).
+    Also readable as a mapping: ``p["Ixx"]``, ``p.as_dict()``.
+
+    Attributes
+    ----------
+    A : area.
+    xcg, zcg : centroid.
+    Ixx, Izz, Ixz : second moments of area about centroidal axes parallel to x and z.
+    thetap : angle of the principal axes from x, in degrees.
+    I11, I22 : principal second moments of area.
+    J : St Venant torsion constant.
+    xs, zs : shear centre.
+    Cw : warping constant.
+    B1, B2 : the monosymmetry (Wagner) parameters about the principal axes 1 and 2.
+    wn : normalised unit warping at each node (length^2), in node order.
+
+    For a closed cell the warping quantities (xs, zs, Cw, B1, B2, wn) are NaN, as in CUFSM.
+    """
 
     A: float
     xcg: float
@@ -228,10 +333,24 @@ class SectionProperties(_DictLike):
     B2: float
     wn: np.ndarray = field(repr=False)
 
+    def _repr_html_(self) -> str:
+        return _display.props_html(self)
+
 
 @dataclass(frozen=True)
 class YieldActions(_DictLike):
-    """First-yield actions. ``B`` is the first-yield bimoment (yieldB)."""
+    """First-yield actions: each is the action alone that first brings a fibre to ``fy``.
+
+    In the model's consistent units (e.g. N and N mm for fy in MPa and lengths in mm).
+
+    Attributes
+    ----------
+    fy : the yield stress used.
+    Py : squash load (A fy).
+    Mxx, Mzz : first-yield moments about the centroidal axes parallel to x and z.
+    M11, M22 : first-yield moments about the principal axes.
+    B : first-yield bimoment (CUFSM yieldB).
+    """
 
     fy: float
     Py: float
@@ -241,16 +360,146 @@ class YieldActions(_DictLike):
     M22: float
     B: float
 
+    def _repr_html_(self) -> str:
+        return _display.actions_html(self, "First-yield actions")
+
 
 @dataclass(frozen=True)
 class StressActions(_DictLike):
-    """Actions fitted to the nodal stresses; ``err`` is the residual norm."""
+    """Actions fitted by least squares to a model's nodal stresses (CUFSM stress_to_action).
+
+    In the model's consistent units. ``err`` is the residual norm of the fit (stress units).
+    """
 
     P: float
     M11: float
     M22: float
     B: float
     err: float
+
+    def _repr_html_(self) -> str:
+        return _display.actions_html(self, "Actions fitted to the stresses")
+
+
+class Displacements(NamedTuple):
+    """Nodal displacements at one position ``y`` along the member, summed over the terms.
+
+    ``u`` (along x), ``v`` (along y, the member axis), ``w`` (along z) and ``theta`` (rotation),
+    one value per node, in node order. See :class:`ModeShape` for the sign conventions.
+    """
+
+    y: float
+    u: np.ndarray
+    v: np.ndarray
+    w: np.ndarray
+    theta: np.ndarray
+
+
+def _ym(bc: str, m: np.ndarray, y: float, a: float) -> np.ndarray:
+    """CUFSM Ym_at_ys: the longitudinal shape function of term(s) m at y."""
+    x = math.pi * y / a
+    if bc == "S-S":
+        return np.sin(m * x)
+    if bc == "C-C":
+        return np.sin(m * x) * math.sin(x)
+    if bc in ("S-C", "C-S"):
+        return np.sin((m + 1) * x) + (m + 1) / m * np.sin(m * x)
+    if bc in ("C-F", "F-C"):
+        return 1 - np.cos((m - 0.5) * x)
+    if bc in ("C-G", "G-C"):
+        return np.sin((m - 0.5) * x) * math.sin(x / 2)
+    raise ValueError(f"boundary condition {bc!r} is not one of S-S, C-C, S-C, C-F, C-G")
+
+
+def _ymprime(bc: str, m: np.ndarray, y: float, a: float) -> np.ndarray:
+    """CUFSM Ymprime_at_ys: dYm/dy."""
+    p = math.pi
+    if bc == "S-S":
+        return p * m * np.cos(p * m * y / a) / a
+    if bc == "C-C":
+        return (p * math.cos(p * y / a) * np.sin(p * m * y / a) + p * m * math.sin(p * y / a) * np.cos(p * m * y / a)) / a
+    if bc in ("S-C", "C-S"):
+        return (p * np.cos(p * y * (m + 1) / a) * (m + 1) + p * np.cos(p * m * y / a) * (m + 1)) / a
+    if bc in ("C-F", "F-C"):
+        return p * np.sin(p * y * (m - 0.5) / a) * (m - 0.5) / a
+    if bc in ("C-G", "G-C"):
+        return (
+            p * np.sin(p * y * (m - 0.5) / a) * math.cos(p * y / (2 * a)) / (2 * a)
+            + p * np.cos(p * y * (m - 0.5) / a) * math.sin(p * y / (2 * a)) * (m - 0.5) / a
+        )
+    raise ValueError(f"boundary condition {bc!r} is not one of S-S, C-C, S-C, C-F, C-G")
+
+
+@dataclass(frozen=True)
+class ModeShape:
+    """One buckling mode, split into per-node displacement amplitudes.
+
+    The finite strip displacement field is, for each longitudinal term ``m`` (CUFSM's general
+    end conditions, Li and Schafer 2010)::
+
+        u(x, y) = sum_m u_m Y_m(y)          (along x)
+        w(x, y) = sum_m w_m Y_m(y)          (along z)
+        theta   = sum_m theta_m Y_m(y)
+        v(x, y) = sum_m v_m Y_m'(y) a / (m pi)   (along y, the member axis)
+
+    with ``Y_m`` the boundary condition's shape function (``sin(m pi y / a)`` for S-S) and ``a``
+    the length (the half-wavelength for a signature curve).
+
+    Attributes
+    ----------
+    length : the length ``a``.
+    load_factor : the mode's load factor (a multiplier on the reference stresses).
+    bc : the end conditions.
+    m_terms : (nterms,) the longitudinal terms.
+    x, z : (nnodes,) the undeformed node coordinates.
+    u, v, w, theta : (nterms, nnodes) amplitudes per term and node. ``theta`` is the rotation
+        in the x-z plane, positive anticlockwise with x to the right and z up; along each strip
+        it is the slope of the displacement normal to the strip.
+    dofs : (4 * nnodes * nterms,) the raw mode vector in CUFSM's DOF order. For term block
+        ``t`` (in ``m_terms`` order) and node ``i`` (0-based, node table order), with
+        ``n = nnodes`` and ``o = 4 * n * t``: ``u = dofs[o + 2i]``, ``v = dofs[o + 2i + 1]``,
+        ``w = dofs[o + 2n + 2i]``, ``theta = dofs[o + 2n + 2i + 1]``. The vector is scaled so its
+        largest-magnitude entry is +1 (so displacements are relative, not absolute).
+    """
+
+    length: float
+    load_factor: float
+    bc: str
+    m_terms: np.ndarray
+    x: np.ndarray
+    z: np.ndarray
+    u: np.ndarray
+    v: np.ndarray
+    w: np.ndarray
+    theta: np.ndarray
+    dofs: np.ndarray = field(repr=False)
+
+    @classmethod
+    def _from_dofs(cls, dofs, length, load_factor, bc, m_terms, x, z) -> "ModeShape":
+        n, nt = len(x), len(m_terms)
+        block = np.asarray(dofs, dtype=float).reshape(nt, 4 * n)
+        uv = block[:, : 2 * n].reshape(nt, n, 2)
+        wt = block[:, 2 * n :].reshape(nt, n, 2)
+        return cls(
+            float(length), float(load_factor), bc, np.asarray(m_terms, dtype=float), x, z,
+            uv[..., 0], uv[..., 1], wt[..., 0], wt[..., 1], np.asarray(dofs, dtype=float),
+        )
+
+    def at(self, y: Optional[float] = None) -> Displacements:
+        """The nodal displacements at ``y`` along the member (0 to ``length``), summed over terms.
+
+        With ``y=None``, the position where the in-plane displacement (u, w) is largest, which is
+        mid-length for a one-term S-S mode.
+        """
+        bc = self.bc.upper()
+        if y is None:
+            ys = np.linspace(0.0, self.length, 201)[1:-1]
+            mags = [np.max(np.hypot(*(_ym(bc, self.m_terms, yy, self.length) @ np.stack([self.u, self.w]))))
+                    for yy in ys]
+            y = float(ys[int(np.argmax(mags))])
+        ym = _ym(bc, self.m_terms, y, self.length)
+        yv = _ymprime(bc, self.m_terms, y, self.length) * self.length / (self.m_terms * math.pi)
+        return Displacements(float(y), ym @ self.u, yv @ self.v, ym @ self.w, ym @ self.theta)
 
 
 def _stack(rows):
@@ -268,12 +517,27 @@ def _stack(rows):
     return lengths, m_terms, lf, modes
 
 
-@dataclass
+@dataclass(repr=False)
 class StripResult:
-    """A finite strip analysis.
+    """The result of :func:`strip` or :func:`signature`.
 
-    ``load_factors[i, k]`` is the k-th load factor at ``lengths[i]`` (NaN where fewer were found);
-    ``modes[i, k]`` its mode over every DOF in CUFSM's order, scaled so its largest entry is +1.
+    Lengths are in the model's length unit: half-wavelengths for a signature curve (one S-S
+    term), physical member lengths for general end conditions. A load factor is a multiplier on
+    the model's reference stresses: the section buckles at ``load_factor x`` those stresses.
+
+    Attributes
+    ----------
+    model : the analysed :class:`Model`.
+    bc : end conditions, 'S-S', 'C-C', 'S-C', 'C-F' or 'C-G'.
+    kind : ``"signature"`` (from :func:`signature`) or ``"strip"``.
+    lengths : (nlengths,) the lengths analysed.
+    m_terms : list of (nterms,) arrays, the longitudinal terms used at each length.
+    load_factors : (nlengths, neigs) load factors, smallest first; NaN where fewer were found.
+    modes : (nlengths, neigs, ndof) raw mode vectors in CUFSM's DOF order (see
+        :class:`ModeShape`), NaN-padded; use :meth:`mode_shape` for per-node arrays.
+    minima : (nminima, 2) rows of ``[length, load factor]`` at each interior local minimum of
+        the signature curve, shortest first (refined by a parabola in log length). Filled by
+        :func:`signature` only; empty for :func:`strip`.
     """
 
     model: Model
@@ -281,31 +545,70 @@ class StripResult:
     lengths: np.ndarray
     m_terms: List[np.ndarray]
     load_factors: np.ndarray
-    modes: np.ndarray = field(repr=False)
+    modes: np.ndarray
+    minima: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
+    kind: str = "strip"
 
     @property
     def curve(self) -> np.ndarray:
-        """The lowest load factor at each length."""
+        """The lowest load factor at each length, ``load_factors[:, 0]``."""
         return self.load_factors[:, 0]
+
+    @property
+    def neigs(self) -> int:
+        """The number of load factor columns."""
+        return int(self.load_factors.shape[1])
+
+    def mode_shape(self, i_length: int, k_mode: int = 0) -> ModeShape:
+        """Mode ``k_mode`` (0 = lowest) at ``lengths[i_length]`` as per-node displacement arrays."""
+        nl = len(self.lengths)
+        if not -nl <= i_length < nl:
+            raise IndexError(f"i_length {i_length} is out of range for {nl} lengths")
+        if not 0 <= k_mode < self.neigs or np.isnan(self.load_factors[i_length, k_mode]):
+            found = int(np.sum(~np.isnan(self.load_factors[i_length])))
+            raise IndexError(f"k_mode {k_mode}: only {found} modes were found at this length")
+        mt = self.m_terms[i_length]
+        n = len(self.model.node)
+        dofs = self.modes[i_length, k_mode, : 4 * n * len(mt)]
+        return ModeShape._from_dofs(
+            dofs, self.lengths[i_length], self.load_factors[i_length, k_mode], self.bc, mt,
+            self.model.x.copy(), self.model.z.copy(),
+        )
 
     def _rows(self):
         out = []
         for i, L in enumerate(self.lengths):
             lf = self.load_factors[i]
             n = int(np.sum(~np.isnan(lf)))
-            out.append((float(L), self.m_terms[i].tolist(), lf[:n].tolist(), self.modes[i, :n].tolist()))
+            nd = 4 * len(self.model.node) * len(self.m_terms[i])
+            out.append((float(L), self.m_terms[i].tolist(), lf[:n].tolist(), self.modes[i, :n, :nd].tolist()))
         return out
 
     def classify(self, orth: str = "axial", norm: str = "vector", ospace: str = "st") -> np.ndarray:
+        """See :func:`classify`: (nlengths, neigs, 4) percentages ``[G, D, L, O]``."""
         return classify(self, orth=orth, norm=norm, ospace=ospace)
 
+    def classify_minima(self) -> np.ndarray:
+        """``[G, D, L, O]`` percentages of the lowest mode at each of :attr:`minima`, shape (nminima, 4).
 
-@dataclass
-class SignatureResult(StripResult):
-    """A signature curve (S-S, one half-wave). ``minima`` is an ``(n, 2)`` array of
-    ``[half-wavelength, load factor]`` at each interior local minimum, shortest first."""
+        Each minimum's length is solved again (S-S, one term) and classified with CUFSM's
+        defaults (axial, vector, ST).
+        """
+        if len(self.minima) == 0:
+            return np.zeros((0, 4))
+        at = strip(self.model, self.minima[:, 0], bc="S-S", neigs=1)
+        return at.classify()[:, 0, :]
 
-    minima: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
+    def __repr__(self) -> str:
+        L = self.lengths
+        rng = f"{L.min():.4g} to {L.max():.4g}" if len(L) else "none"
+        s = f"StripResult({self.kind}, bc={self.bc}, {len(L)} lengths {rng}, neigs={self.neigs}"
+        if self.kind == "signature":
+            s += f", {len(self.minima)} minima"
+        return s + ")"
+
+    def _repr_html_(self) -> str:
+        return _display.result_html(self)
 
 
 # --- functions -------------------------------------------------------------------------
@@ -318,10 +621,13 @@ def _model(m) -> Model:
 
 
 def section_properties(model: Model) -> SectionProperties:
-    """Gross and thin-walled section properties (CUFSM grosprop and cutwp_prop2)."""
+    """Gross and thin-walled section properties (CUFSM grosprop and cutwp_prop2).
+
+    Unit-agnostic: the results are in the model's units (e.g. mm^2, mm^4, mm^6).
+    """
     d = _native.section_properties(_model(model)._arrays())
     d["wn"] = np.asarray(d["wn"])
-    return SectionProperties(**d)
+    return SectionProperties(**d)  # type: ignore[arg-type]
 
 
 def stress(
@@ -335,7 +641,11 @@ def stress(
     restrained: bool = False,
     as_array: bool = False,
 ):
-    """Reference stresses from actions (CUFSM stresgen, plus warp_stress for a bimoment B).
+    """Reference stresses from member actions (CUFSM stresgen, plus warp_stress for a bimoment).
+
+    ``P`` axial force (positive = compression), ``Mxx``/``Mzz`` moments about the centroidal
+    axes parallel to x and z, ``M11``/``M22`` about the principal axes, ``B`` a bimoment. Units
+    are the model's consistent set (e.g. N, N mm, N mm^2 with mm and MPa). The actions add.
 
     ``restrained=True`` is CUFSM's restrained bending (``unsymm = 0``: Ixz ignored).
     Returns a new Model with the stress column set, or the stress array if ``as_array``.
@@ -345,25 +655,37 @@ def stress(
 
 
 def first_yield(model: Model, fy: float, restrained: bool = False, extreme_fibre: bool = True) -> YieldActions:
-    """First-yield actions: ``yieldMP_extfiber`` (element faces, default) or ``yieldMP``
-    (centreline nodes, ``extreme_fibre=False``), and the bimoment ``yieldB``."""
+    """First-yield actions for yield stress ``fy`` (in the model's stress unit).
+
+    ``extreme_fibre=True`` (default, as current CUFSM) checks the element faces
+    (``yieldMP_extfiber``); ``False`` checks the centreline nodes (``yieldMP``). The bimoment is
+    CUFSM's ``yieldB``. ``restrained=True`` is restrained bending (Ixz ignored).
+    """
     if not (math.isfinite(fy) and fy > 0):
         raise ValueError(f"fy = {fy} must be positive")
     return YieldActions(**_native.first_yield(_model(model)._arrays(), float(fy), not restrained, extreme_fibre))
 
 
 def stress_to_action(model: Model) -> StressActions:
-    """The P, M11, M22, B whose stresses best fit the model's nodal stresses."""
+    """The P, M11, M22 and B whose stresses best fit the model's nodal stresses (least squares).
+
+    Units are the model's consistent set.
+    """
     return StressActions(**_native.stress_to_action(_model(model)._arrays()))
 
 
-def signature(model: Model, lengths: Optional[ArrayLike] = None, neigs: int = 1) -> SignatureResult:
-    """Signature curve: S-S, one half-wave per length. With ``lengths=None``, CUFSM's
-    ``signature_ss`` 100 log-spaced lengths. Local minima are refined by a parabola in log L."""
+def signature(model: Model, lengths: Optional[ArrayLike] = None, neigs: int = 1) -> StripResult:
+    """The signature curve: S-S end conditions, one half-wave at each half-wavelength.
+
+    ``lengths`` are half-wavelengths in the model's length unit; with ``None``, CUFSM's
+    ``signature_ss`` 100 log-spaced lengths. Load factors multiply the model's reference
+    stresses. The result's ``minima`` holds the interior local minima of the lowest curve,
+    refined by a parabola in log length.
+    """
     ls = None if lengths is None else np.asarray(lengths, dtype=float).ravel().tolist()
     rows, minima = _native.signature(_model(model)._arrays(), ls, int(neigs))
     L, mt, lf, modes = _stack(rows)
-    return SignatureResult(model, "S-S", L, mt, lf, modes, minima=np.asarray(minima, dtype=float).reshape(-1, 2))
+    return StripResult(model, "S-S", L, mt, lf, modes, np.asarray(minima, dtype=float).reshape(-1, 2), "signature")
 
 
 def strip(
@@ -376,9 +698,13 @@ def strip(
 ) -> StripResult:
     """CUFSM stripmain: load factors and modes at each length.
 
-    ``m_all``: longitudinal terms per length - a list of lists, a single list used for every
-    length, an int ``n`` for ``1..n``, or None for ``[1]``. ``bc``: 'S-S', 'C-C', 'S-C',
-    'C-F', 'C-G'. ``spaces``: restrict to cFSM spaces, e.g. ``"D"`` or ``"GD"`` (None = all).
+    ``lengths`` in the model's length unit (half-wavelengths for S-S with one term, physical
+    lengths otherwise). ``m_all``: longitudinal terms per length; a list of lists, a single
+    list used for every length, an int ``n`` for ``1..n``, or None for ``[1]``. ``bc``: 'S-S',
+    'C-C', 'S-C', 'C-F', 'C-G'. ``neigs``: how many load factors to find at each length.
+    ``spaces``: restrict to cFSM spaces, e.g. ``"D"`` or ``"GD"`` (None = unrestricted).
+
+    Load factors multiply the model's reference stresses.
     """
     ls = np.asarray(lengths, dtype=float).ravel().tolist()
     if m_all is None:
@@ -395,15 +721,16 @@ def strip(
         raise ValueError(f"{len(ls)} lengths but {len(ma)} sets of longitudinal terms")
     rows = _native.strip(_model(model)._arrays(), ls, ma, bc, int(neigs), spaces)
     L, mt, lf, modes = _stack(rows)
-    return StripResult(model, bc, L, mt, lf, modes)
+    return StripResult(model, bc.upper(), L, mt, lf, modes)
 
 
 def classify(result: StripResult, orth: str = "axial", norm: str = "vector", ospace: str = "st") -> np.ndarray:
     """cFSM modal classification (CUFSM classify.m, uncoupled basis).
 
-    Returns ``[nlengths, neigs, 4]`` percentages ``[G, D, L, O]`` (NaN-padded).
+    Returns ``(nlengths, neigs, 4)`` percentages ``[G, D, L, O]`` (see :data:`MODE_CLASSES`),
+    NaN-padded where fewer modes were found. Percentages are dimensionless.
     ``orth``: natural | axial | load; ``norm``: none | vector | strain_energy | work;
-    ``ospace``: st | k | kg | vector.
+    ``ospace``: st | k | kg | vector. The defaults are CUFSM's.
     """
     out = _native.classify(result.model._arrays(), result._rows(), result.bc, orth, norm, ospace)
     arr = np.full(result.load_factors.shape + (4,), np.nan)
@@ -444,8 +771,15 @@ def template(
     E: float = 29500.0,
     nu: float = 0.3,
 ) -> Model:
-    """CUFSM's C/Z template (templatecalc). Unset second-side values mirror the first; corner and
-    lip strip counts default to 2 where the radius/lip is non-zero. Reference stress is 1.0."""
+    """CUFSM's C/Z template (templatecalc).
+
+    ``h`` web depth, ``b1``/``b2`` flange widths, ``d1``/``d2`` lip lengths, ``r1``..``r4``
+    corner radii, ``q1``/``q2`` lip angles (degrees), ``t`` thickness, ``n*`` strip counts,
+    ``centerline`` whether the dimensions are to the centreline (else outside). Defaults are
+    CUFSM's (inches and ksi). Unset second-side values mirror the first; corner and lip strip
+    counts default to 2 where the radius/lip is non-zero. Reference stress is 1.0 at every node.
+    Units: any consistent set.
+    """
     b2 = b1 if b2 is None else b2
     d2 = d1 if d2 is None else d2
     r2 = r1 if r2 is None else r2
@@ -453,7 +787,10 @@ def template(
     r4 = r1 if r4 is None else r4
     q2 = q1 if q2 is None else q2
     nb2 = nb1 if nb2 is None else nb2
-    dflt = lambda n, v: (2 if v > 0 else 0) if n is None else n  # noqa: E731
+
+    def dflt(n: Optional[int], v: float) -> int:
+        return (2 if v > 0 else 0) if n is None else n
+
     node, elem = _native.template(
         shape, h, b1, b2, d1, d2, r1, r2, r3, r4, q1, q2, t, nh, nb1, nb2,
         dflt(nd1, d1), dflt(nd2, d2), dflt(nr1, r1), dflt(nr2, r2), dflt(nr3, r3), dflt(nr4, r4),
@@ -474,17 +811,22 @@ def _outside(shape, depth, flange, lip, t, ri, mesh, E, nu):
 
 def lipped_c(depth: float, flange: float, lip: float, t: float, ri: float = 0.0, mesh: int = 12,
              E: float = 203000.0, nu: float = 0.3) -> Model:
-    """A lipped channel from OUTSIDE dimensions and inside radius (cufsm-rs ``Template::outside``)."""
+    """A lipped channel from OUTSIDE dimensions and inside radius (cufsm-rs ``Template::outside``).
+
+    ``mesh`` strips across the web, half that across each flange, two per lip and corner.
+    The default ``E`` is steel in MPa, so give dimensions in mm (or pass ``E`` in your units).
+    Reference stress is 1.0 at every node.
+    """
     return _outside("C", depth, flange, lip, t, ri, mesh, E, nu)
 
 
 def lipped_z(depth: float, flange: float, lip: float, t: float, ri: float = 0.0, mesh: int = 12,
              E: float = 203000.0, nu: float = 0.3) -> Model:
-    """A lipped Z from outside dimensions and inside radius."""
+    """A lipped Z from outside dimensions and inside radius (see :func:`lipped_c` for units)."""
     return _outside("Z", depth, flange, lip, t, ri, mesh, E, nu)
 
 
 def plain_c(depth: float, flange: float, t: float, ri: float = 0.0, mesh: int = 12,
             E: float = 203000.0, nu: float = 0.3) -> Model:
-    """A plain (unlipped) channel from outside dimensions and inside radius."""
+    """A plain (unlipped) channel from outside dimensions and inside radius (see :func:`lipped_c`)."""
     return _outside("C", depth, flange, 0.0, t, ri, mesh, E, nu)
