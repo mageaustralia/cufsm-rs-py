@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-01)
 
 First release: Python bindings for cufsm-rs 0.4.1, the Rust port of CUFSM.
 
