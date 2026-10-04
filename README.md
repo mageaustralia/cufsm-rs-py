@@ -17,10 +17,14 @@ not affiliated with or endorsed by the CUFSM authors.
 
 ## Why this exists
 
-[cufsm-rs](https://github.com/mageaustralia/cufsm-rs) is a Rust port of CUFSM, written so CUFSM
-could run in the browser, compiled to WebAssembly, in CivilKit Buckling. These bindings make the
-same engine available in Python, so a script and the web app give the same numbers. The results
-are checked against CUFSM's own MATLAB code run under Octave (see [Tests](#tests)).
+[cufsm-rs](https://github.com/mageaustralia/cufsm-rs) is a Rust port of CUFSM. Its WebAssembly
+build runs CUFSM in the browser, in
+[CivilKit Buckling](https://mageengineering.com.au/apps/buckling/), with no Python involved.
+
+This package is the other build of the same engine: a native extension for CPython (3.9 and
+later), for scripts and notebooks on your own machine, so a script and the web app give the same
+numbers. It needs NumPy, and it does not run in the browser, under Pyodide or under MicroPython.
+The results are checked against CUFSM's own MATLAB code run under Octave (see [Tests](#tests)).
 
 ## Units
 
