@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.1 (2026-10-05)
+
+Built on cufsm-rs 0.4.2.
+
+- A model with a node that belongs to no element is now refused by every function with
+  `ValueError("invalid model: node N (node row i) belongs to no element")`, naming the node by
+  its CUFSM node number. Before, a cFSM run on such a model (`strip` with `spaces`, `classify`)
+  panicked in the engine and raised `pyo3_runtime.PanicException`, which `except ValueError`
+  (or `except Exception`) does not catch.
+- The same model also changes elsewhere: a free `strip` or `signature` used to raise
+  `MechanismError` ("not positive definite"), and `section_properties`, `stress`, `first_yield`
+  and `stress_to_action` used to return results. All now raise the `ValueError` above.
+  `MechanismError` is a subclass of `ValueError`, so code that catches `ValueError` sees no
+  difference on the analyses.
+- Nothing else in cufsm-rs 0.4.2 changes what this package computes: the rest of that release
+  is new exports in its C interface, which this package does not use.
+- README: says that this package is the CPython build of cufsm-rs, and that a page in the
+  browser runs the WebAssembly build, not this package.
+
 ## 0.1.0 (2026-10-01)
 
 First release: Python bindings for cufsm-rs 0.4.1, the Rust port of CUFSM.

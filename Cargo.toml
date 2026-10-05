@@ -1,6 +1,6 @@
 [package]
 name = "cufsm-rs-py"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "Python bindings for cufsm-rs, the Rust port of CUFSM (finite strip buckling of thin-walled sections)."
@@ -13,7 +13,7 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-cufsm-rs = "0.4.1"
+cufsm-rs = "0.4.2"
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
 
 [profile.release]

@@ -204,6 +204,18 @@ fn build(
         constraints: cons,
         springs: sprs,
     };
+    // cufsm-rs refuses this too, but names the node by its 0-based index; name it by its node#.
+    let mut used = vec![false; m.nodes.len()];
+    for e in &m.elements {
+        used[e.ni] = true;
+        used[e.nj] = true;
+    }
+    if let Some(i) = used.iter().position(|&u| !u) {
+        return Err(bad(format!(
+            "invalid model: node {} (node row {i}) belongs to no element",
+            node[i][0]
+        )));
+    }
     m.validate().map_err(to_py)?;
     Ok(m)
 }

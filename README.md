@@ -151,7 +151,7 @@ raises `cufsm_rs.MechanismError`, a subclass of `ValueError`. The long solves (`
 ## Install from source
 
 You need Rust (1.75 or later) and Python 3.9 or later. The Rust engine comes from crates.io
-(`cufsm-rs = "0.4.1"`).
+(`cufsm-rs = "0.4.2"`).
 
 ```sh
 python3 -m venv .venv && source .venv/bin/activate

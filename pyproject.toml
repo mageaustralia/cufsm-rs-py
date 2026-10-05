@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cufsm-rs-py"
-version = "0.1.0"
+version = "0.1.1"
 description = "CUFSM finite strip buckling analysis of thin-walled sections in Python, on cufsm-rs, the Rust port that also runs CUFSM in the browser."
 readme = "README.md"
 requires-python = ">=3.9"
